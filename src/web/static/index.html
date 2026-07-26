@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трансляция с камеры</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1>Трансляция с камеры</h1>
+  <p class="lead">Укажите путь до трансляции — идентификатор или готовый адрес манифеста.</p>
+
+  <form id="form" autocomplete="off">
+    <input id="src" name="src" aria-label="путь до трансляции" required>
+    <button type="submit">Смотреть</button>
+  </form>
+
+  <p id="hint" class="muted" hidden></p>
+  <p id="err" class="err" hidden></p>
+  <p id="preview" class="muted" hidden></p>
+</main>
+
+<script>
+const form = document.getElementById('form');
+const srcInput = document.getElementById('src');
+const err = document.getElementById('err');
+const preview = document.getElementById('preview');
+const hint = document.getElementById('hint');
+
+// The page has no idea what ingest is recording — it only builds a URL from what
+// you type. Asking the service keeps the suggestion honest when STREAM_ID changes.
+(async () => {
+  try {
+    const r = await fetch('/api/default-stream');
+    const { stream_id } = await r.json();
+    srcInput.placeholder = 'например: ' + stream_id;
+    srcInput.value = stream_id;
+    hint.textContent = 'этот сервер пишет трансляцию «' + stream_id + '»';
+    hint.hidden = false;
+    srcInput.dispatchEvent(new Event('input'));
+  } catch {
+    srcInput.placeholder = 'идентификатор или адрес манифеста';
+  }
+})();
+
+async function check(src) {
+  const r = await fetch('/api/resolve?src=' + encodeURIComponent(src));
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.detail || 'не удалось разобрать путь');
+  return body.manifest_url;
+}
+
+srcInput.addEventListener('input', async () => {
+  err.hidden = true;
+  const v = srcInput.value.trim();
+  if (!v) { preview.hidden = true; return; }
+  try {
+    preview.textContent = 'манифест: ' + await check(v);
+    preview.hidden = false;
+  } catch { preview.hidden = true; }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const v = srcInput.value.trim();
+  try {
+    await check(v);
+    location.href = '/watch?src=' + encodeURIComponent(v);
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+  }
+});
+</script>
+</body>
+</html>

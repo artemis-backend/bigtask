@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Просмотр трансляции</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="wide">
+  <p><a href="/">← другая трансляция</a></p>
+  <h1 id="title">Трансляция</h1>
+
+  <p id="err" class="err" hidden></p>
+
+  <video id="video" controls playsinline></video>
+
+  <div class="bar">
+    <button id="live-btn" type="button">К эфиру</button>
+    <span class="stat">состояние: <b id="state">—</b></span>
+    <span class="stat">задержка: <b id="latency">—</b></span>
+  </div>
+</main>
+
+<script src="/static/vendor/hls.js"></script>
+<script type="module">
+import { startPlayer } from '/static/player.js';
+
+const params = new URLSearchParams(location.search);
+const src = (params.get('src') || '').trim();
+const err = document.getElementById('err');
+
+function fail(msg) { err.textContent = msg; err.hidden = false; }
+
+(async () => {
+  if (!src) { fail('путь до трансляции не указан'); return; }
+  document.getElementById('title').textContent = 'Трансляция: ' + src;
+  try {
+    const r = await fetch('/api/resolve?src=' + encodeURIComponent(src));
+    const body = await r.json();
+    if (!r.ok) { fail(body.detail || 'не удалось разобрать путь'); return; }
+    startPlayer(body.manifest_url, {
+      video: document.getElementById('video'),
+      latencyEl: document.getElementById('latency'),
+      stateEl: document.getElementById('state'),
+      liveBtn: document.getElementById('live-btn'),
+      onError: fail,
+    });
+  } catch (e) {
+    fail('сервис недоступен: ' + e.message);
+  }
+})();
+</script>
+</body>
+</html>

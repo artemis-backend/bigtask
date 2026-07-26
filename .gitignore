@@ -1,0 +1,7 @@
+.env
+.tdd-phase
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+spool/

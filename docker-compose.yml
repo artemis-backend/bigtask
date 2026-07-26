@@ -1,0 +1,34 @@
+x-app: &app
+  build: { context: ., dockerfile: deploy/Dockerfile }
+  image: bigbro-stream:local
+  env_file: [.env]
+  restart: unless-stopped
+
+services:
+  ingest:
+    <<: *app
+    command: ["python3", "-m", "ingest"]
+    environment:
+      SPOOL_DIR: /var/spool/hls
+      # The camera's substream: 553 kbit/s against 9.2 Mbit/s on the main one.
+      # Override in .env for a camera that publishes elsewhere; empty = main stream.
+      RTSP_PATH: ${RTSP_PATH:-/Streaming/Channels/102}
+    volumes: ["spool:/var/spool/hls"]
+    # ffmpeg has no RTSP reconnect of its own; the restart policy is the supervisor.
+
+  uploader:
+    <<: *app
+    command: ["python3", "-m", "uploader"]
+    environment:
+      SPOOL_DIR: /var/spool/hls
+    volumes: ["spool:/var/spool/hls"]
+    depends_on: [ingest]
+
+  web:
+    <<: *app
+    command: ["uvicorn", "--factory", "web.app:create_app",
+              "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8000:8000"]
+
+volumes:
+  spool:

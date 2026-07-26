@@ -1,0 +1,16 @@
+[project]
+name = "bigbro-stream"
+version = "0.1.0"
+description = "RTSP camera -> HLS EVENT -> object storage, with live + DVR playback"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
