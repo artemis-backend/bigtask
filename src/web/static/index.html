@@ -18,14 +18,12 @@
 
   <p id="hint" class="muted" hidden></p>
   <p id="err" class="err" hidden></p>
-  <p id="preview" class="muted" hidden></p>
 </main>
 
 <script>
 const form = document.getElementById('form');
 const srcInput = document.getElementById('src');
 const err = document.getElementById('err');
-const preview = document.getElementById('preview');
 const hint = document.getElementById('hint');
 
 // The page has no idea what ingest is recording — it only builds a URL from what
@@ -38,7 +36,6 @@ const hint = document.getElementById('hint');
     srcInput.value = stream_id;
     hint.textContent = 'этот сервер пишет трансляцию «' + stream_id + '»';
     hint.hidden = false;
-    srcInput.dispatchEvent(new Event('input'));
   } catch {
     srcInput.placeholder = 'идентификатор или адрес манифеста';
   }
@@ -51,15 +48,7 @@ async function check(src) {
   return body.manifest_url;
 }
 
-srcInput.addEventListener('input', async () => {
-  err.hidden = true;
-  const v = srcInput.value.trim();
-  if (!v) { preview.hidden = true; return; }
-  try {
-    preview.textContent = 'манифест: ' + await check(v);
-    preview.hidden = false;
-  } catch { preview.hidden = true; }
-});
+srcInput.addEventListener('input', () => { err.hidden = true; });
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
