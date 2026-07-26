@@ -4,6 +4,7 @@
 # which compose does not guarantee.
 FROM alpine:3
 
+# These mirror [project].dependencies in pyproject.toml; change both together.
 RUN apk add --no-cache ffmpeg python3 py3-pip \
  && pip install --break-system-packages --no-cache-dir boto3 fastapi uvicorn
 

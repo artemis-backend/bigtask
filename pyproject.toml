@@ -3,7 +3,12 @@ name = "bigbro-stream"
 version = "0.1.0"
 description = "RTSP camera -> HLS EVENT -> object storage, with live + DVR playback"
 requires-python = ">=3.12"
-dependencies = []
+# Keep in sync with deploy/Dockerfile, which installs these into the image.
+dependencies = [
+    "boto3>=1.34",   # uploader
+    "fastapi>=0.115",  # web
+    "uvicorn>=0.30",   # web
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]
