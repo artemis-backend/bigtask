@@ -5,7 +5,8 @@
  * rather than breaking if a future release drops it.
  */
 
-const LIVE_THRESHOLD_S = 12;   // below one target duration plus slack: still "live"
+const LIVE_EDGE_OFFSET_S = 12;  // how far behind the newest segment playback sits
+const LIVE_THRESHOLD_S = 20;    // within this of the edge still counts as "в эфире"
 
 /** Wall-clock lag of the played position, in seconds. Pure. */
 export function latencySeconds(anchor, currentTime, now) {
@@ -54,6 +55,13 @@ export function startPlayer(manifestUrl, ui) {
     liveDurationInfinity: true,   // seekbar spans the whole session, not a window
     backBufferLength: 900,        // memory cap only; the seek range comes from the playlist
     lowLatencyMode: false,
+
+    // Distance from the live edge, in seconds. The default is three *target
+    // durations*, and EXT-X-TARGETDURATION is the longest segment ever produced —
+    // in an EVENT playlist it only ever grows. One overlong segment (a reconnect
+    // stretched one to 37 s here) would therefore pin the live edge two minutes
+    // back for the rest of the session. Fixing it in seconds is immune to that.
+    liveSyncDuration: LIVE_EDGE_OFFSET_S,
   });
 
   let anchor = null;
