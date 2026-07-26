@@ -29,6 +29,11 @@ services:
     command: ["uvicorn", "--factory", "web.app:create_app",
               "--host", "0.0.0.0", "--port", "8000"]
     ports: ["8000:8000"]
+    # A camera handed in on the page is captured by this service itself, into a
+    # subdirectory of the same volume the `ingest` service writes to.
+    environment:
+      SPOOL_ROOT: /var/spool/hls
+    volumes: ["spool:/var/spool/hls"]
 
 volumes:
   spool:

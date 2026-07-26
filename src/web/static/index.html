@@ -9,11 +9,12 @@
 <body>
 <main>
   <h1>Трансляция с камеры</h1>
-  <p class="lead">Укажите путь до трансляции — идентификатор или готовый адрес манифеста.</p>
+  <p class="lead">Укажите путь до трансляции: <b>адрес камеры</b> <code>rtsp://…</code>,
+  идентификатор уже идущей трансляции или готовый адрес манифеста.</p>
 
   <form id="form" autocomplete="off">
     <input id="src" name="src" aria-label="путь до трансляции" required>
-    <button type="submit">Смотреть</button>
+    <button id="go" type="submit">Смотреть</button>
   </form>
 
   <p id="hint" class="muted" hidden></p>
@@ -37,9 +38,11 @@ const hint = document.getElementById('hint');
     hint.textContent = 'этот сервер пишет трансляцию «' + stream_id + '»';
     hint.hidden = false;
   } catch {
-    srcInput.placeholder = 'идентификатор или адрес манифеста';
+    srcInput.placeholder = 'rtsp://… либо идентификатор трансляции';
   }
 })();
+
+const isCamera = (v) => /^rtsps?:\/\//i.test(v);
 
 async function check(src) {
   const r = await fetch('/api/resolve?src=' + encodeURIComponent(src));
@@ -48,17 +51,35 @@ async function check(src) {
   return body.manifest_url;
 }
 
+/** Hand the camera to the service and get back the id it records under. */
+async function startCamera(src) {
+  const r = await fetch('/api/streams', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ src }),
+  });
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.detail || 'не удалось запустить камеру');
+  return body.stream_id;
+}
+
 srcInput.addEventListener('input', () => { err.hidden = true; });
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const v = srcInput.value.trim();
+  const go = document.getElementById('go');
+  go.disabled = true;
   try {
-    await check(v);
-    location.href = '/watch?src=' + encodeURIComponent(v);
+    // A camera has no manifest until it has been recording for a few seconds,
+    // so the watch page is opened straight after the stream is registered and
+    // shows its own error until the first segments land.
+    const target = isCamera(v) ? await startCamera(v) : (await check(v), v);
+    location.href = '/watch?src=' + encodeURIComponent(target);
   } catch (ex) {
     err.textContent = ex.message;
     err.hidden = false;
+    go.disabled = false;
   }
 });
 </script>

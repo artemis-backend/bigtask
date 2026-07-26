@@ -8,6 +8,10 @@
 const LIVE_EDGE_OFFSET_S = 12;  // how far behind the newest segment playback sits
 const LIVE_THRESHOLD_S = 20;    // within this of the edge still counts as "в эфире"
 
+// A camera started from the page needs a few segments before its manifest exists.
+const MANIFEST_WARMUP_TRIES = 20;
+const MANIFEST_WARMUP_DELAY_MS = 3000;
+
 /** Wall-clock lag of the played position, in seconds. Pure. */
 export function latencySeconds(anchor, currentTime, now) {
   if (!anchor) return null;
@@ -32,7 +36,7 @@ function errorText(data, url) {
   const d = data.details || "";
   if (d === "manifestLoadError" || d === "manifestLoadTimeOut") {
     const code = data.response && data.response.code;
-    if (code === 404) return `манифест не найден (404): ${url}`;
+    if (code === 404) return `манифест не найден: ${url}`;
     if (code === 403) return `доступ к манифесту запрещён (403) — публичный доступ к бакету выключен?`;
     return `манифест не загрузился — проверьте CORS на бакете и адрес: ${url}`;
   }
@@ -73,10 +77,21 @@ export function startPlayer(manifestUrl, ui) {
     }
   });
 
+  let warmupLeft = MANIFEST_WARMUP_TRIES;
+
   hls.on(window.Hls.Events.ERROR, (_e, data) => {
     if (!data.fatal) return;
     if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
       hls.recoverMediaError();
+      return;
+    }
+    // A camera just handed in on the page has no manifest until its first
+    // segments reach the bucket, so an early 404 means "not yet", not "wrong".
+    const missing = data.details === "manifestLoadError"
+      && data.response && data.response.code === 404;
+    if (missing && warmupLeft-- > 0) {
+      stateEl.textContent = "запускается…";
+      setTimeout(() => hls.loadSource(manifestUrl), MANIFEST_WARMUP_DELAY_MS);
       return;
     }
     if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && data.details !== "manifestLoadError") {
