@@ -8,6 +8,10 @@ Two rules carry the correctness of this module:
    half-written segment, and nothing would ever go back and fix it.
 2. The playlist is uploaded last, and only when every segment it references is
    already in the bucket. Otherwise viewers get a manifest pointing at 404s.
+
+Once a segment is in the bucket the local copy has no reader — the player is
+served from object storage — so it is pruned. The playlist itself is never
+pruned: it is what ffmpeg appends to on restart.
 """
 
 import hashlib
@@ -28,6 +32,14 @@ STATE_FILE = ".uploaded.json"
 # small fraction. Uploading them one at a time therefore leaves the link idle and
 # lets the published manifest fall minutes behind the live edge.
 DEFAULT_WORKERS = 8
+
+# How long an uploaded segment stays on disk before it is dropped. It buys
+# nothing for playback — that reads from the bucket — only a margin for anything
+# still holding the file open, so it is short.
+DEFAULT_RETENTION_S = 300.0
+
+# Pruning walks the spool directory, so it does not run on every upload cycle.
+PRUNE_EVERY_S = 30.0
 
 log = logging.getLogger(__name__)
 
@@ -139,17 +151,88 @@ def sync_once(
     return state
 
 
+def prunable_segments(
+    spool: Path,
+    prefix: str,
+    state: SyncState,
+    retention_s: float,
+    now: float | None = None,
+) -> list[Path]:
+    """Local segments safe to delete: uploaded, aged out, and not the newest one.
+
+    Being in `state.uploaded` is the only evidence that a segment is durable, so
+    nothing else is ever a candidate. The newest uploaded segment is kept whatever
+    its age, because when the playlist is lost ffmpeg picks its next segment
+    number from the highest index still on disk — deleting the whole spool would
+    restart numbering and overwrite the DVR history already in the bucket.
+    """
+    spool = Path(spool)
+    now = time.time() if now is None else now
+    try:
+        names = sorted(entry.name for entry in spool.iterdir() if entry.is_file())
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return []
+
+    uploaded = [
+        name for name in names
+        if name not in (PLAYLIST_NAME, STATE_FILE)
+        and not name.endswith(".tmp")
+        and _key(prefix, name) in state.uploaded
+    ]
+    if len(uploaded) < 2:
+        return []
+
+    out = []
+    for name in uploaded[:-1]:
+        path = spool / name
+        try:
+            aged = now - path.stat().st_mtime >= retention_s
+        except OSError:
+            continue
+        if aged:
+            out.append(path)
+    return out
+
+
+def prune_spool(
+    spool: Path,
+    prefix: str,
+    state: SyncState,
+    retention_s: float,
+    now: float | None = None,
+) -> int:
+    """Delete what `prunable_segments` selects. Returns how many went."""
+    removed = 0
+    for path in prunable_segments(spool, prefix, state, retention_s, now):
+        try:
+            path.unlink()
+        except OSError:
+            log.warning("could not prune %s", path)
+            continue
+        removed += 1
+    return removed
+
+
 def run_forever(
     spool: Path,
     storage: ObjectStorage,
     prefix: str,
     interval: float,
     workers: int = DEFAULT_WORKERS,
+    retention_s: float = DEFAULT_RETENTION_S,
 ) -> None:
     state = load_state(spool)
+    last_prune = time.monotonic()
     while True:
         before = (len(state.uploaded), state.playlist_digest)
         state = sync_once(spool, storage, prefix, state, workers)
         if (len(state.uploaded), state.playlist_digest) != before:
             save_state(spool, state)
+
+        if retention_s > 0 and time.monotonic() - last_prune >= PRUNE_EVERY_S:
+            last_prune = time.monotonic()
+            removed = prune_spool(spool, prefix, state, retention_s)
+            if removed:
+                log.info("pruned %s uploaded segments from the spool", removed)
+
         time.sleep(interval)

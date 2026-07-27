@@ -23,11 +23,12 @@ def main() -> int:
         region=settings.region,
         max_pool_connections=settings.workers * 2,
     )
-    log.info("syncing %s -> %s/%s every %ss with %s workers",
+    log.info("syncing %s -> %s/%s every %ss with %s workers, spool retention %ss",
              settings.spool_dir, settings.bucket, settings.stream_id,
-             settings.upload_interval, settings.workers)
+             settings.upload_interval, settings.workers, settings.spool_retention)
     run_forever(settings.spool_dir, storage, settings.stream_id,
-                settings.upload_interval, settings.workers)
+                settings.upload_interval, settings.workers,
+                settings.spool_retention)
     return 0
 
 

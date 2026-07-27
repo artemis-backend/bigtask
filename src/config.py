@@ -54,6 +54,33 @@ class WebSettings:
 
 
 @dataclass(frozen=True)
+class TranscodeSettings:
+    """Whether and how to re-encode.
+
+    Read separately from `IngestSettings` because a camera handed in on the page
+    is captured by the web service, which has no `RTSP_URL` of its own — and it
+    needs these knobs for the same reason the ingest service does.
+    """
+
+    enabled: bool
+    video_bitrate: str | None
+    scale_height: int | None
+
+    @classmethod
+    def from_env(cls, env: dict[str, str] | None = None) -> "TranscodeSettings":
+        env = os.environ if env is None else env
+        # Setting either knob implies a transcode — copying cannot change bitrate.
+        bitrate = env.get("VIDEO_BITRATE", "").strip() or None
+        height = env.get("SCALE_HEIGHT", "").strip() or None
+        explicit = env.get("TRANSCODE", "").strip().lower() in {"1", "true", "yes"}
+        return cls(
+            enabled=explicit or bool(bitrate) or bool(height),
+            video_bitrate=bitrate,
+            scale_height=int(height) if height else None,
+        )
+
+
+@dataclass(frozen=True)
 class IngestSettings:
     rtsp_url: str
     spool_dir: Path
@@ -65,17 +92,14 @@ class IngestSettings:
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "IngestSettings":
         env = os.environ if env is None else env
-        # Setting either knob implies a transcode — copying cannot change bitrate.
-        bitrate = env.get("VIDEO_BITRATE", "").strip() or None
-        height = env.get("SCALE_HEIGHT", "").strip() or None
-        transcode = env.get("TRANSCODE", "").strip().lower() in {"1", "true", "yes"}
+        encode = TranscodeSettings.from_env(env)
         return cls(
             rtsp_url=_with_path(_require("RTSP_URL", env), env.get("RTSP_PATH", "")),
             spool_dir=Path(env.get("SPOOL_DIR", "/var/spool/hls")),
             hls_time=int(env.get("HLS_TIME", "4")),
-            transcode=transcode or bool(bitrate) or bool(height),
-            video_bitrate=bitrate,
-            scale_height=int(height) if height else None,
+            transcode=encode.enabled,
+            video_bitrate=encode.video_bitrate,
+            scale_height=encode.scale_height,
         )
 
 
@@ -90,12 +114,16 @@ class UploaderSettings:
     region: str
     upload_interval: float
     workers: int
+    spool_retention: float
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "UploaderSettings":
         env = os.environ if env is None else env
         return cls(
             workers=int(env.get("UPLOAD_WORKERS", "8")),
+            # 0 keeps every segment on disk forever, which is what the spool did
+            # before this knob existed.
+            spool_retention=float(env.get("SPOOL_RETENTION", "300")),
             spool_dir=Path(env.get("SPOOL_DIR", "/var/spool/hls")),
             stream_id=env.get("STREAM_ID", "default"),
             bucket=_require("S3_BUCKET", env),

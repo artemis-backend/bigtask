@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from config import UploaderSettings
+from config import TranscodeSettings, UploaderSettings
 from ingest.command import build_ffmpeg_args, resume_start_number
 from uploader.storage import S3ObjectStorage
 from uploader.sync import run_forever
@@ -70,10 +70,17 @@ class Stream:
 class StreamManager:
     """Runs one ffmpeg and one uploader per requested camera."""
 
-    def __init__(self, settings: UploaderSettings, spool_root: Path, hls_time: int = 4):
+    def __init__(
+        self,
+        settings: UploaderSettings,
+        spool_root: Path,
+        hls_time: int = 4,
+        transcode: TranscodeSettings | None = None,
+    ):
         self._settings = settings
         self._spool_root = Path(spool_root)
         self._hls_time = hls_time
+        self._transcode = transcode or TranscodeSettings(False, None, None)
         self._streams: dict[str, Stream] = {}
         self._lock = threading.Lock()
 
@@ -115,9 +122,11 @@ class StreamManager:
                 rtsp_url=rtsp_url,
                 out_dir=spool,
                 hls_time=self._hls_time,
-                transcode=False,
+                transcode=self._transcode.enabled,
                 resume=True,
                 start_number=resume_start_number(spool),
+                video_bitrate=self._transcode.video_bitrate,
+                scale_height=self._transcode.scale_height,
             )
             try:
                 code = subprocess.run(argv).returncode
@@ -137,4 +146,5 @@ class StreamManager:
             max_pool_connections=self._settings.workers * 2,
         )
         run_forever(spool, storage, stream_id,
-                    self._settings.upload_interval, self._settings.workers)
+                    self._settings.upload_interval, self._settings.workers,
+                    self._settings.spool_retention)

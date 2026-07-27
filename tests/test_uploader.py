@@ -9,10 +9,23 @@ objects the bucket does not have yet.
 import threading
 import time
 
+import os
+import time
+
 import pytest
 
 from uploader.storage import CONTENT_TYPES, content_type_for
-from uploader.sync import SyncState, load_state, save_state, segments_in_playlist, sync_once
+from uploader.sync import (
+    PLAYLIST_NAME,
+    STATE_FILE,
+    SyncState,
+    load_state,
+    prunable_segments,
+    prune_spool,
+    save_state,
+    segments_in_playlist,
+    sync_once,
+)
 
 PLAYLIST = """\
 #EXTM3U
@@ -340,3 +353,110 @@ def test_prefix_normalisation(tmp_path, prefix):
     storage = FakeStorage()
     sync_once(spool, storage, prefix, SyncState())
     assert storage.keys[-1] == "s/demo/index.m3u8"
+
+
+# --- pruning the spool -------------------------------------------------------
+#
+# This is the only code in the project that deletes anything, and what it deletes
+# is the recording. Every guard below is a way the DVR history could be lost.
+
+
+def aged_spool(tmp_path, count=5, age_s=3600):
+    """A spool of `count` segments, all written `age_s` ago, all uploaded."""
+    (tmp_path / PLAYLIST_NAME).write_text(
+        "#EXTM3U\n" + "".join(f"#EXTINF:5,\nseg_{i:06d}.ts\n" for i in range(count))
+    )
+    old = time.time() - age_s
+    for i in range(count):
+        path = tmp_path / f"seg_{i:06d}.ts"
+        path.write_bytes(b"\x47" * 16)
+        os.utime(path, (old, old))
+    state = SyncState(uploaded={f"demo/seg_{i:06d}.ts" for i in range(count)})
+    return tmp_path, state
+
+
+def test_aged_uploaded_segments_are_pruned(tmp_path):
+    spool, state = aged_spool(tmp_path)
+    assert prune_spool(spool, "demo", state, retention_s=300) == 4
+    assert sorted(p.name for p in spool.glob("seg_*.ts")) == ["seg_000004.ts"]
+
+
+def test_the_newest_segment_is_never_pruned(tmp_path):
+    """With the playlist gone, ffmpeg resumes numbering from the highest index on
+    disk; an empty spool would restart at 0 and overwrite the bucket."""
+    spool, state = aged_spool(tmp_path)
+    prune_spool(spool, "demo", state, retention_s=300)
+    assert (spool / "seg_000004.ts").exists()
+
+
+def test_a_lone_segment_is_kept(tmp_path):
+    spool, state = aged_spool(tmp_path, count=1)
+    assert prune_spool(spool, "demo", state, retention_s=300) == 0
+    assert (spool / "seg_000000.ts").exists()
+
+
+def test_segments_not_yet_uploaded_are_never_pruned(tmp_path):
+    """Deleting one would lose it: nothing re-reads a segment ffmpeg has closed."""
+    spool, state = aged_spool(tmp_path)
+    state.uploaded.discard("demo/seg_000001.ts")
+    prune_spool(spool, "demo", state, retention_s=300)
+    assert (spool / "seg_000001.ts").exists()
+
+
+def test_segments_uploaded_under_another_prefix_are_not_pruned(tmp_path):
+    """Two streams share a volume; one must not delete the other's spool."""
+    spool, state = aged_spool(tmp_path)
+    assert prune_spool(spool, "other", state, retention_s=300) == 0
+    assert len(list(spool.glob("seg_*.ts"))) == 5
+
+
+def test_fresh_segments_are_kept(tmp_path):
+    spool, state = aged_spool(tmp_path, age_s=0)
+    assert prune_spool(spool, "demo", state, retention_s=300) == 0
+
+
+def test_the_playlist_is_never_pruned(tmp_path):
+    """ffmpeg appends to it on restart; losing it restarts numbering at zero."""
+    spool, state = aged_spool(tmp_path)
+    state.uploaded.add("demo/index.m3u8")
+    prune_spool(spool, "demo", state, retention_s=300)
+    assert (spool / PLAYLIST_NAME).exists()
+
+
+def test_the_state_file_is_never_pruned(tmp_path):
+    spool, state = aged_spool(tmp_path)
+    save_state(spool, state)
+    os.utime(spool / STATE_FILE, (0, 0))
+    state.uploaded.add(f"demo/{STATE_FILE}")
+    prune_spool(spool, "demo", state, retention_s=300)
+    assert (spool / STATE_FILE).exists()
+
+
+def test_tmp_files_are_never_pruned(tmp_path):
+    """A .tmp file is a segment ffmpeg is still writing."""
+    spool, state = aged_spool(tmp_path)
+    partial = spool / "seg_000005.ts.tmp"
+    partial.write_bytes(b"\x47")
+    os.utime(partial, (0, 0))
+    state.uploaded.add("demo/seg_000005.ts.tmp")
+    prune_spool(spool, "demo", state, retention_s=300)
+    assert partial.exists()
+
+
+def test_retention_zero_still_keeps_the_newest(tmp_path):
+    spool, state = aged_spool(tmp_path)
+    prune_spool(spool, "demo", state, retention_s=0)
+    assert [p.name for p in spool.glob("seg_*.ts")] == ["seg_000004.ts"]
+
+
+def test_pruning_a_missing_spool_is_not_an_error(tmp_path):
+    assert prunable_segments(tmp_path / "nope", "demo", SyncState(), 300) == []
+
+
+def test_pruning_does_not_disturb_the_upload_state(tmp_path):
+    """Pruned segments must stay in `uploaded`, or the next pass re-uploads them."""
+    spool, state = aged_spool(tmp_path)
+    prune_spool(spool, "demo", state, retention_s=300)
+    storage = FakeStorage()
+    sync_once(spool, storage, "demo", state)
+    assert not [k for k in storage.keys if k.endswith(".ts")]

@@ -8,6 +8,7 @@ free of it.
 
 import pytest
 
+from config import TranscodeSettings
 from web.streams import (
     InvalidCamera,
     _redacted,
@@ -84,3 +85,41 @@ def test_unusable_sources_are_rejected(src):
 
 def test_valid_camera_url_is_returned_stripped():
     assert validate_camera_url(f"  {CAMERA}  ") == CAMERA
+
+
+# --- transcode knobs reach the page-started capture too ----------------------
+#
+# A camera handed in on the page is captured by the web service, which has no
+# RTSP_URL and therefore cannot read IngestSettings. Parsing these separately is
+# what keeps VIDEO_BITRATE from silently applying to the compose service only.
+
+
+def test_no_knobs_means_no_transcode():
+    assert TranscodeSettings.from_env({}) == TranscodeSettings(False, None, None)
+
+
+def test_bitrate_alone_enables_transcode():
+    """Copying cannot change bitrate, so asking for one implies re-encoding."""
+    encode = TranscodeSettings.from_env({"VIDEO_BITRATE": "2500k"})
+    assert (encode.enabled, encode.video_bitrate) == (True, "2500k")
+
+
+def test_scale_height_alone_enables_transcode():
+    encode = TranscodeSettings.from_env({"SCALE_HEIGHT": "720"})
+    assert (encode.enabled, encode.scale_height) == (True, 720)
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
+def test_transcode_flag_is_accepted_in_the_usual_spellings(value):
+    assert TranscodeSettings.from_env({"TRANSCODE": value}).enabled
+
+
+@pytest.mark.parametrize("value", ["", "0", "no", "false"])
+def test_transcode_flag_off(value):
+    assert not TranscodeSettings.from_env({"TRANSCODE": value}).enabled
+
+
+def test_blank_knobs_are_treated_as_unset():
+    """docker-compose passes an empty string for a variable absent from .env."""
+    encode = TranscodeSettings.from_env({"VIDEO_BITRATE": "  ", "SCALE_HEIGHT": ""})
+    assert encode == TranscodeSettings(False, None, None)

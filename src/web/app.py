@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import ConfigError, UploaderSettings, WebSettings
+from config import ConfigError, TranscodeSettings, UploaderSettings, WebSettings
 from web.resolver import InvalidSource, resolve_manifest_url
 from web.streams import InvalidCamera, StreamManager, is_camera_url
 
@@ -31,6 +31,7 @@ def create_app(settings: WebSettings | None = None) -> FastAPI:
             settings=UploaderSettings.from_env(),
             spool_root=Path(os.environ.get("SPOOL_ROOT", "/var/spool/hls")),
             hls_time=int(os.environ.get("HLS_TIME", "4")),
+            transcode=TranscodeSettings.from_env(),
         )
 
     @app.get("/healthz")
