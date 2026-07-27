@@ -19,7 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 from config import TranscodeSettings, UploaderSettings
 from ingest.command import build_ffmpeg_args, resume_start_number
 from uploader.storage import S3ObjectStorage
-from uploader.sync import run_forever
+from uploader.sync import run_forever, spool_is_fresh
 
 RTSP_SCHEMES = frozenset({"rtsp", "rtsps"})
 ID_PREFIX = "cam-"
@@ -98,6 +98,9 @@ class StreamManager:
                 return existing
 
             spool = self._spool_root / stream_id
+            # Decided before ffmpeg runs: once it writes a playlist there is no
+            # way to tell a resumed recording from one restarting at zero.
+            fresh = spool_is_fresh(spool)
             spool.mkdir(parents=True, exist_ok=True)
             stream = Stream(stream_id=stream_id, source=_redacted(rtsp_url), spool=spool)
             self._streams[stream_id] = stream
@@ -108,7 +111,7 @@ class StreamManager:
             name=f"ingest-{stream_id}", daemon=True,
         ).start()
         threading.Thread(
-            target=self._upload_forever, args=(stream_id, spool),
+            target=self._upload_forever, args=(stream_id, spool, fresh),
             name=f"upload-{stream_id}", daemon=True,
         ).start()
 
@@ -136,7 +139,7 @@ class StreamManager:
             log.warning("ffmpeg for %s exited with %s, restarting", spool.name, code)
             threading.Event().wait(_RESTART_DELAY_S)
 
-    def _upload_forever(self, stream_id: str, spool: Path) -> None:
+    def _upload_forever(self, stream_id: str, spool: Path, fresh: bool) -> None:
         storage = S3ObjectStorage(
             bucket=self._settings.bucket,
             access_key_id=self._settings.access_key_id,
@@ -147,4 +150,4 @@ class StreamManager:
         )
         run_forever(spool, storage, stream_id,
                     self._settings.upload_interval, self._settings.workers,
-                    self._settings.spool_retention)
+                    self._settings.spool_retention, fresh)

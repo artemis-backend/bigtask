@@ -4,8 +4,12 @@ R2 infers Content-Type when the caller omits it, and a wrong type makes the
 player fail without an error message — so every put sets it explicitly.
 """
 
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import Protocol
+
+# S3 DeleteObjects takes at most 1000 keys per call.
+DELETE_BATCH = 1000
 
 CONTENT_TYPES = {
     ".m3u8": "application/vnd.apple.mpegurl",
@@ -22,6 +26,10 @@ def content_type_for(name: str) -> str:
 
 class ObjectStorage(Protocol):
     def put(self, key: str, data: bytes, content_type: str) -> None: ...
+
+    def list_keys(self, prefix: str) -> list[str]: ...
+
+    def delete(self, keys: Sequence[str]) -> None: ...
 
 
 class S3ObjectStorage:
@@ -60,3 +68,16 @@ class S3ObjectStorage:
         self._client.put_object(
             Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
         )
+
+    def list_keys(self, prefix: str) -> list[str]:
+        pages = self._client.get_paginator("list_objects_v2").paginate(
+            Bucket=self.bucket, Prefix=prefix
+        )
+        return [obj["Key"] for page in pages for obj in page.get("Contents", [])]
+
+    def delete(self, keys: Sequence[str]) -> None:
+        for start in range(0, len(keys), DELETE_BATCH):
+            batch = keys[start:start + DELETE_BATCH]
+            self._client.delete_objects(
+                Bucket=self.bucket, Delete={"Objects": [{"Key": k} for k in batch]}
+            )

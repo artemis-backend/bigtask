@@ -213,6 +213,26 @@ def prune_spool(
     return removed
 
 
+def spool_is_fresh(spool: Path) -> bool:
+    """True when capture is about to start a new numbering sequence from zero.
+
+    ffmpeg picks its next segment number from the playlist, so a spool without
+    one restarts at `seg_000000` regardless of what the bucket already holds.
+    The state file is checked too: it alone would let the uploader skip segments
+    whose keys it believes are already stored.
+    """
+    spool = Path(spool)
+    return not (spool / PLAYLIST_NAME).exists() and not (spool / STATE_FILE).exists()
+
+
+def purge_prefix(storage: ObjectStorage, prefix: str) -> int:
+    """Drop every object under the prefix. Returns how many went."""
+    keys = storage.list_keys(f"{prefix.strip('/')}/")
+    if keys:
+        storage.delete(keys)
+    return len(keys)
+
+
 def run_forever(
     spool: Path,
     storage: ObjectStorage,
@@ -220,7 +240,29 @@ def run_forever(
     interval: float,
     workers: int = DEFAULT_WORKERS,
     retention_s: float = DEFAULT_RETENTION_S,
+    fresh: bool | None = None,
 ) -> None:
+    """`fresh` says whether capture is starting a new numbering sequence.
+
+    Callers that launch capture themselves must decide it *before* ffmpeg runs:
+    once ffmpeg writes the first playlist the evidence is gone. Left as None the
+    spool is inspected here, which is only sound when capture has not started yet.
+    """
+    # A prefix holds exactly one numbering sequence. Starting a second one over
+    # the top of an old recording overwrites its segments while leaving the old
+    # manifest in place, so viewers get yesterday's playlist pointing at today's
+    # video until the new manifest lands. Clearing first is the only consistent
+    # outcome; keeping both is not on offer, because the keys collide.
+    if spool_is_fresh(spool) if fresh is None else fresh:
+        try:
+            dropped = purge_prefix(storage, prefix)
+        except Exception:
+            log.exception("could not clear %s before a fresh capture", prefix)
+        else:
+            if dropped:
+                log.warning("cleared %s stale objects under %s: capture restarts "
+                            "numbering from zero", dropped, prefix)
+
     state = load_state(spool)
     last_prune = time.monotonic()
     while True:

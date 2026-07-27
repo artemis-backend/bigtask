@@ -22,8 +22,10 @@ from uploader.sync import (
     load_state,
     prunable_segments,
     prune_spool,
+    purge_prefix,
     save_state,
     segments_in_playlist,
+    spool_is_fresh,
     sync_once,
 )
 
@@ -45,14 +47,25 @@ seg_000001.ts
 class FakeStorage:
     """Records every put in order; can be told to fail on specific keys."""
 
-    def __init__(self, fail_on=()):
+    def __init__(self, fail_on=(), existing=()):
         self.calls = []
         self.fail_on = set(fail_on)
+        self.stored = dict.fromkeys(existing, b"")
+        self.deleted = []
 
     def put(self, key, data, content_type):
         if key in self.fail_on:
             raise OSError(f"boom: {key}")
         self.calls.append((key, content_type, len(data)))
+        self.stored[key] = data
+
+    def list_keys(self, prefix):
+        return [key for key in self.stored if key.startswith(prefix)]
+
+    def delete(self, keys):
+        for key in keys:
+            self.stored.pop(key, None)
+            self.deleted.append(key)
 
     @property
     def keys(self):
@@ -451,6 +464,59 @@ def test_retention_zero_still_keeps_the_newest(tmp_path):
 
 def test_pruning_a_missing_spool_is_not_an_error(tmp_path):
     assert prunable_segments(tmp_path / "nope", "demo", SyncState(), 300) == []
+
+
+# --- one prefix, one numbering sequence --------------------------------------
+#
+# The stream id is a hash of the camera URL, so the same camera lands on the same
+# prefix every time. If the spool is gone but the bucket is not, ffmpeg restarts
+# at seg_000000 and overwrites yesterday's objects while yesterday's manifest is
+# still published — viewers get the old playlist pointing at the new video.
+
+
+def test_a_spool_without_a_playlist_is_fresh(tmp_path):
+    assert spool_is_fresh(tmp_path)
+
+
+def test_a_spool_with_a_playlist_is_not_fresh(tmp_path):
+    (tmp_path / PLAYLIST_NAME).write_text("#EXTM3U\n")
+    assert not spool_is_fresh(tmp_path)
+
+
+def test_a_pruned_spool_is_not_fresh(tmp_path):
+    """Pruning keeps the playlist precisely so this stays distinguishable."""
+    spool, state = aged_spool(tmp_path)
+    prune_spool(spool, "demo", state, retention_s=0)
+    assert not spool_is_fresh(spool)
+
+
+def test_a_spool_with_only_a_state_file_is_not_fresh(tmp_path):
+    """State alone would make the uploader skip segments it thinks are stored."""
+    save_state(tmp_path, SyncState(uploaded={"demo/seg_000000.ts"}))
+    assert not spool_is_fresh(tmp_path)
+
+
+def test_purge_removes_everything_under_the_prefix():
+    storage = FakeStorage(existing=["demo/index.m3u8", "demo/seg_000000.ts"])
+    assert purge_prefix(storage, "demo") == 2
+    assert storage.list_keys("demo/") == []
+
+
+def test_purge_leaves_other_prefixes_alone():
+    storage = FakeStorage(existing=["demo/seg_000000.ts", "other/seg_000000.ts"])
+    purge_prefix(storage, "demo")
+    assert storage.list_keys("other/") == ["other/seg_000000.ts"]
+
+
+def test_purge_is_not_confused_by_a_prefix_that_is_a_name_prefix():
+    """`demo` must not take `demo2` with it."""
+    storage = FakeStorage(existing=["demo/seg_000000.ts", "demo2/seg_000000.ts"])
+    purge_prefix(storage, "demo")
+    assert storage.list_keys("demo2/") == ["demo2/seg_000000.ts"]
+
+
+def test_purge_of_an_empty_prefix_is_not_an_error():
+    assert purge_prefix(FakeStorage(), "demo") == 0
 
 
 def test_pruning_does_not_disturb_the_upload_state(tmp_path):
