@@ -19,9 +19,25 @@ CONTENT_TYPES = {
 }
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
 
+# A live EVENT playlist changes every few seconds, so it must be revalidated on
+# every request; served stale, the player never sees the stream grow.
+PLAYLIST_CACHE_CONTROL = "no-cache"
+
+# Segments are short-lived rather than immutable: a capture restarting from zero
+# reuses seg_000000.ts for different video, and a client holding the old copy
+# would play yesterday's footage under today's manifest. One minute is long
+# enough to help a reload, short enough that the collision window closes.
+SEGMENT_CACHE_CONTROL = "public, max-age=60"
+
 
 def content_type_for(name: str) -> str:
     return CONTENT_TYPES.get(PurePosixPath(name).suffix, DEFAULT_CONTENT_TYPE)
+
+
+def cache_control_for(name: str) -> str:
+    if PurePosixPath(name).suffix == ".m3u8":
+        return PLAYLIST_CACHE_CONTROL
+    return SEGMENT_CACHE_CONTROL
 
 
 class ObjectStorage(Protocol):
@@ -66,7 +82,8 @@ class S3ObjectStorage:
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
         self._client.put_object(
-            Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
+            Bucket=self.bucket, Key=key, Body=data, ContentType=content_type,
+            CacheControl=cache_control_for(key),
         )
 
     def list_keys(self, prefix: str) -> list[str]:

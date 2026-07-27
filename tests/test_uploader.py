@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from uploader.storage import CONTENT_TYPES, content_type_for
+from uploader.storage import CONTENT_TYPES, cache_control_for, content_type_for
 from uploader.sync import (
     PLAYLIST_NAME,
     STATE_FILE,
@@ -103,6 +103,18 @@ def test_preserves_playlist_order():
 
 
 # --- content types ----------------------------------------------------------
+
+
+def test_the_playlist_must_be_revalidated_every_time():
+    """Served stale, the player never sees the stream grow past the cached copy."""
+    assert cache_control_for("index.m3u8") == "no-cache"
+
+
+def test_segments_are_not_cached_as_immutable():
+    """A capture restarting from zero reuses seg_000000.ts for different video."""
+    value = cache_control_for("seg_000000.ts")
+    assert "immutable" not in value
+    assert "max-age=60" in value
 
 
 def test_content_types_are_explicit():
