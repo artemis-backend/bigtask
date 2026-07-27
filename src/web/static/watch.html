@@ -20,6 +20,8 @@
     <span class="stat">состояние: <b id="state">—</b></span>
     <span class="stat">задержка: <b id="latency">—</b></span>
   </div>
+
+  <pre id="debug" class="debug" hidden></pre>
 </main>
 
 <script src="/static/vendor/hls.js"></script>
@@ -39,11 +41,14 @@ function fail(msg) { err.textContent = msg; err.hidden = false; }
     const r = await fetch('/api/resolve?src=' + encodeURIComponent(src));
     const body = await r.json();
     if (!r.ok) { fail(body.detail || 'не удалось разобрать путь'); return; }
+    const debugEl = document.getElementById('debug');
+    if (params.has('debug')) debugEl.hidden = false;
     startPlayer(body.manifest_url, {
       video: document.getElementById('video'),
       latencyEl: document.getElementById('latency'),
       stateEl: document.getElementById('state'),
       liveBtn: document.getElementById('live-btn'),
+      debugEl: params.has('debug') ? debugEl : null,
       onError: fail,
     });
   } catch (e) {

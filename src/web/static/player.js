@@ -45,8 +45,24 @@ function errorText(data, url) {
   return `ошибка воспроизведения: ${d || data.type}`;
 }
 
+/** Everything needed to tell a stale manifest from a mis-seeked player. */
+function describe(hls, video, anchor, lag, edge) {
+  const d = hls.levels?.[hls.currentLevel]?.details;
+  const s = video.seekable;
+  const iso = (ms) => (ms ? new Date(ms).toISOString().slice(11, 23) : "—");
+  const n = (x, k = 1) => (Number.isFinite(x) ? x.toFixed(k) : String(x));
+  return [
+    `фрагментов: ${d?.fragments?.length ?? "—"}  live: ${d?.live}  тип: ${d?.type}`,
+    `PDT первого: ${iso(d?.fragments?.[0]?.programDateTime)}  последнего: ${iso(d?.fragments?.at(-1)?.programDateTime)}`,
+    `currentTime: ${n(video.currentTime)}  liveSyncPosition: ${n(hls.liveSyncPosition)}  edge: ${n(edge)}`,
+    `seekable: ${s.length ? `${n(s.start(0))}…${n(s.end(s.length - 1))}` : "пусто"}  duration: ${n(video.duration)}`,
+    `якорь PDT: ${iso(anchor?.pdt)} @ start ${n(anchor?.start)}  задержка: ${n(lag)} с`,
+    `paused: ${video.paused}  readyState: ${video.readyState}  now: ${iso(Date.now())}`,
+  ].join("\n");
+}
+
 export function startPlayer(manifestUrl, ui) {
-  const { video, latencyEl, stateEl, liveBtn, onError } = ui;
+  const { video, latencyEl, stateEl, liveBtn, onError, debugEl } = ui;
 
   if (!window.Hls || !window.Hls.isSupported()) {
     onError("этот браузер не поддерживает Media Source Extensions");
@@ -118,6 +134,8 @@ export function startPlayer(manifestUrl, ui) {
     stateEl.textContent = st.text;
     stateEl.classList.toggle("live", st.live);
     liveBtn.disabled = st.live;
+
+    if (debugEl) debugEl.textContent = describe(hls, video, anchor, lag, edge);
   }
 
   liveBtn.addEventListener("click", () => {
